@@ -1484,6 +1484,152 @@ function renderLog(container, filterZoneId){
 // ---------- Email summary ----------
 // Draws a donut (defect count by department) + horizontal bars (minutes per
 // zone, split by department) so the summary isn't just a wall of text.
+// Imagen única con los 4 gráficos del resumen semanal: KPIs, dónut por
+// departamento, ranking de coches y Pareto de defectos por código.
+function buildWeeklyChartsImage(selectedCars, allCars){
+  const W = 900, H = 820;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const BG = '#0a1420', PANEL2 = '#16293b', LINE = '#22384d', TEXT = '#eaf2f5', MUTED = '#7f93a3', ACCENT = '#17c39b';
+  ctx.fillStyle = BG; ctx.fillRect(0,0,W,H);
+
+  // ---- Agregación de datos ----
+  let totalDefects = 0, totalTime = 0;
+  const countByDept = {}, codeCounts = {}, carCounts = {};
+  selectedCars.forEach(car => {
+    const entries = allCars[car] || [];
+    totalDefects += entries.length;
+    carCounts[car] = entries.length;
+    entries.forEach(e => {
+      totalTime += (e.time||0);
+      countByDept[e.dept] = (countByDept[e.dept]||0) + 1;
+      const zone = ZONES.find(z=>z.id===e.zoneId);
+      const key = e.code + ' · ' + (zone ? zone.name : e.zoneId);
+      codeCounts[key] = (codeCounts[key]||0) + 1;
+    });
+  });
+
+  // ---- Título ----
+  ctx.fillStyle = TEXT; ctx.font = 'bold 26px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(`Resumen semanal · ${modelLabel()}`, 28, 24);
+  ctx.font = '13px sans-serif'; ctx.fillStyle = MUTED;
+  ctx.fillText(`${selectedCars.length} coche${selectedCars.length===1?'':'s'}`, 28, 56);
+
+  // ---- KPI cards ----
+  const kpiY = 90, kpiH = 96, kpiGap = 18, kpiW = (W - 56 - kpiGap*2) / 3;
+  const kpis = [
+    { label:'COCHES', value:String(selectedCars.length), color:ACCENT },
+    { label:'DEFECTOS', value:String(totalDefects), color:'#ffb020' },
+    { label:'TIEMPO TOTAL', value:`${totalTime} min`, color:'#7dd3fc' },
+  ];
+  kpis.forEach((k,i) => {
+    const x = 28 + i*(kpiW+kpiGap);
+    ctx.fillStyle = PANEL2;
+    roundRect(ctx, x, kpiY, kpiW, kpiH, 12); ctx.fill();
+    ctx.strokeStyle = LINE; ctx.lineWidth = 1;
+    roundRect(ctx, x, kpiY, kpiW, kpiH, 12); ctx.stroke();
+    ctx.fillStyle = k.color; ctx.font = 'bold 30px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline='alphabetic';
+    ctx.fillText(k.value, x + kpiW/2, kpiY + 52);
+    ctx.fillStyle = MUTED; ctx.font = 'bold 11px sans-serif';
+    ctx.fillText(k.label, x + kpiW/2, kpiY + 76);
+  });
+
+  // ---- Dónut por departamento (izquierda) ----
+  const donutY = kpiY + kpiH + 70;
+  ctx.fillStyle = TEXT; ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Por departamento', 28, donutY - 40);
+  const cx = 150, cy = donutY + 90, rOuter = 92, rInner = 56;
+  const sum = Object.values(countByDept).reduce((a,b)=>a+b,0) || 1;
+  let startAngle = -Math.PI/2;
+  DEPARTMENTS.forEach(d => {
+    const val = countByDept[d.id] || 0;
+    const angle = (val/sum) * Math.PI*2;
+    ctx.beginPath(); ctx.moveTo(cx,cy);
+    ctx.arc(cx,cy,rOuter,startAngle,startAngle+angle);
+    ctx.closePath(); ctx.fillStyle = d.color; ctx.fill();
+    startAngle += angle;
+  });
+  ctx.beginPath(); ctx.arc(cx,cy,rInner,0,Math.PI*2); ctx.fillStyle = BG; ctx.fill();
+  ctx.fillStyle = TEXT; ctx.font = 'bold 28px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(String(totalDefects), cx, cy-8);
+  ctx.font = '12px sans-serif'; ctx.fillStyle = MUTED;
+  ctx.fillText('defectos', cx, cy+16);
+  let ly = cy + rOuter + 26;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.font = 'bold 12px sans-serif';
+  DEPARTMENTS.forEach(d => {
+    const n = countByDept[d.id] || 0;
+    const pct = sum ? Math.round(n/sum*100) : 0;
+    ctx.fillStyle = d.color; ctx.fillRect(cx - rOuter, ly, 12, 12);
+    ctx.fillStyle = TEXT;
+    ctx.fillText(`${d.name} · ${n} (${pct}%)`, cx - rOuter + 18, ly + 10);
+    ly += 22;
+  });
+
+  // ---- Ranking de coches (derecha) ----
+  const rankX = 470, rankW = W - 28 - rankX;
+  ctx.fillStyle = TEXT; ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Ranking de coches', rankX, donutY - 40);
+  const rankRows = Object.entries(carCounts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const maxCount = Math.max(1, ...rankRows.map(r=>r[1]));
+  const rankBarH = 22, rankGap = 14, rankTop = donutY;
+  ctx.font = 'bold 13px sans-serif';
+  rankRows.forEach(([car, n], i) => {
+    const y = rankTop + i*(rankBarH+rankGap);
+    const w = (n / maxCount) * (rankW - 70);
+    ctx.fillStyle = MUTED; ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText(car, rankX, y + rankBarH/2);
+    ctx.fillStyle = ACCENT;
+    roundRect(ctx, rankX + 62, y, Math.max(4,w), rankBarH, 5); ctx.fill();
+    ctx.fillStyle = TEXT; ctx.textAlign='left';
+    ctx.fillText(String(n), rankX + 62 + w + 8, y + rankBarH/2);
+  });
+
+  // ---- Pareto de defectos ----
+  const paretoY = donutY + Math.max(rOuter*2 + 26 + DEPARTMENTS.length*22, rankRows.length*(rankBarH+rankGap)) + 70;
+  ctx.fillStyle = TEXT; ctx.font = 'bold 15px sans-serif'; ctx.textAlign='left';
+  ctx.fillText('Pareto de defectos (por código y zona)', 28, paretoY - 30);
+  const paretoItems = Object.entries(codeCounts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const totalCodeCount = paretoItems.reduce((s,[,n])=>s+n,0) || 1;
+  const barAreaX = 28, barAreaW = W - 56, barH = 180, baseY = paretoY + barH;
+  const maxVal = Math.max(1, ...paretoItems.map(([,n])=>n));
+  const bw = barAreaW / paretoItems.length;
+  let cum = 0;
+  const points = [];
+  paretoItems.forEach(([label, n], i) => {
+    const bh = (n / maxVal) * (barH - 20);
+    const bx = barAreaX + i*bw + bw*0.18;
+    ctx.fillStyle = ACCENT;
+    ctx.fillRect(bx, baseY - bh, bw*0.64, bh);
+    ctx.fillStyle = TEXT; ctx.font = 'bold 12px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(String(n), bx + bw*0.32, baseY - bh - 8);
+    ctx.font = '10px sans-serif'; ctx.fillStyle = MUTED;
+    const parts = label.split(' · ');
+    ctx.fillText(parts[0], bx + bw*0.32, baseY + 16);
+    ctx.font = '8.5px sans-serif';
+    ctx.fillText((parts[1]||'').slice(0,14), bx + bw*0.32, baseY + 29);
+    cum += n;
+    points.push({ x: bx + bw*0.32, y: baseY - (cum/totalCodeCount) * (barH-20) });
+  });
+  ctx.strokeStyle = '#ffb020'; ctx.lineWidth = 2; ctx.beginPath();
+  points.forEach((p,i) => { if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y); });
+  ctx.stroke();
+  ctx.fillStyle = '#ffb020';
+  points.forEach(p => { ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2); ctx.fill(); });
+
+  return canvas.toDataURL('image/png');
+}
+
+function roundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+
 function buildSummaryChart(){
   const W = 760, H = 560;
   const canvas = document.createElement('canvas');
@@ -1851,6 +1997,8 @@ function showWeeklySummarySheet(selectedCars, allCars){
   }
   body += `\nPor coche:\n${perCarLines.join('\n')}`;
 
+  const chartDataUrl = buildWeeklyChartsImage(selectedCars, allCars);
+
   const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   const inIframe = (() => { try{ return window.self !== window.top; }catch(e){ return true; } })();
   const canShare = !!(navigator.share) && !inIframe;
@@ -1860,9 +2008,11 @@ function showWeeklySummarySheet(selectedCars, allCars){
   overlay.innerHTML = `
     <div class="sheet" style="max-height:85vh; overflow-y:auto;">
       <h3>${subject}</h3>
-      <a href="${mailto}" id="weeklyMailLink" style="display:block; text-align:center; padding:16px; border-radius:12px; background:var(--ok); color:#08210f; text-decoration:none; font-weight:800; font-size:16px; margin-bottom:10px;">Abrir email</a>
-      ${canShare ? `<button class="cancel-btn" id="shareWeeklyBtn" style="margin-bottom:10px;">Compartir</button>` : ''}
-      <button class="cancel-btn" id="copyWeeklyBtn" style="margin-bottom:10px;">Copiar resumen</button>
+      <img src="${chartDataUrl}" alt="Gráficos del resumen semanal" style="width:100%; border-radius:12px; border:1px solid var(--line); margin-bottom:10px;">
+      <a href="${chartDataUrl}" download="resumen_${modelName}_${selectedCars.length}coches.png" class="cancel-btn" style="display:block; text-align:center; text-decoration:none; margin-bottom:10px;">Descargar gráficos</a>
+      <a href="${mailto}" id="weeklyMailLink" style="display:block; text-align:center; padding:16px; border-radius:12px; background:var(--ok); color:#08210f; text-decoration:none; font-weight:800; font-size:16px; margin-bottom:10px;">Abrir email (solo texto)</a>
+      ${canShare ? `<button class="cancel-btn" id="shareWeeklyBtn" style="margin-bottom:10px;">Compartir (texto + gráficos)</button>` : ''}
+      <button class="cancel-btn" id="copyWeeklyBtn" style="margin-bottom:10px;">Copiar resumen (texto)</button>
       <textarea id="weeklyText" readonly style="width:100%; height:220px; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:8px; font-size:12px; margin-bottom:10px;">${subject}\n\n${body}</textarea>
       <button class="cancel-btn" id="closeWeeklySheet">Cerrar</button>
     </div>
@@ -1890,7 +2040,15 @@ function showWeeklySummarySheet(selectedCars, allCars){
     overlay.querySelector('#shareWeeklyBtn').addEventListener('click', async () => {
       showToast('Preparando para compartir…');
       try{
-        await navigator.share({ title: subject, text: subject + '\n\n' + body });
+        const file = dataUrlToFile(chartDataUrl, `resumen_${modelName}_${selectedCars.length}coches.png`);
+        const withFile = { title: subject, text: subject + '\n\n' + body, files: [file] };
+        const canShareFile = !!(navigator.canShare && navigator.canShare(withFile));
+        if(canShareFile){
+          await navigator.share(withFile);
+        }else{
+          showToast('Este navegador no admite compartir imágenes aquí, solo texto');
+          await navigator.share({ title: subject, text: subject + '\n\n' + body });
+        }
       }catch(e){
         if(e && e.name === 'AbortError') return;
         showToast('Fallo al compartir (' + (e && e.name) + '): ' + ((e && e.message) || e));
